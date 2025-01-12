@@ -528,7 +528,7 @@ unpack_recv_buffer_gpu (FabArray<FAB>& mf, int scomp, int ncomp,
 struct PackComponents {
     int dest_component{0};
     int src_component{0};
-    int n_components{0};
+    int n_components{1};
 };
 
 //! \brief Dispatch local copies to the default behaviour that knows no DTOS nor projection.
@@ -882,9 +882,16 @@ ParallelCopy (FabArray<FAB>& dest, const FabArray<FAB>& src, const FabArrayBase:
     components.dest_component = destcomp.i;
     components.src_component = srccomp.i;
     components.n_components = numcomp.n;
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
     ApplyDtosAndProjectionOnReciever<DTOS, Proj> packing{components, dtos, proj};
     CommHandler handler = ParallelCopy_nowait(dest, src, cmd, packing);
     ParallelCopy_finish(dest, std::move(handler), cmd, packing); // NOLINT
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 }
 
 //! \brief Call ParallelCopy_nowait followed by ParallelCopy_finish.

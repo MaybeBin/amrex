@@ -55,6 +55,8 @@ public:
     }
     void update () override;
 
+    void setGaussSeidel (bool flag) noexcept { m_use_gauss_seidel = flag; }
+
     virtual bool isCrossStencil () const { return true; }
     virtual bool isTensorOp () const { return false; }
 
@@ -85,6 +87,8 @@ public:
 
     void solutionResidual (int amrlev, MF& resid, MF& x, const MF& b,
                                    const MF* crse_bcdata=nullptr) override;
+
+    void prepareForFluxes (int amrlev, const MF* crse_bcdata = nullptr) override;
 
     void correctionResidual (int amrlev, int mglev, MF& resid, MF& x, const MF& b,
                                      BCMode bc_mode, const MF* crse_bcdata=nullptr) final;
@@ -132,6 +136,10 @@ public:
     };
 
     Vector<std::unique_ptr<MF> > m_robin_bcval;
+
+#ifdef AMREX_USE_HYPRE
+    void setInterpBndryHalfWidth (int w) { m_interpbndry_halfwidth = w; }
+#endif
 
 protected:
 
@@ -195,6 +203,8 @@ protected:
 
     mutable Vector<YAFluxRegisterT<MF>> m_fluxreg;
 
+    bool m_use_gauss_seidel = true; // use red-black Gauss-Seidel by default
+
 private:
 
     void defineAuxData ();
@@ -202,6 +212,8 @@ private:
 
     void computeVolInv () const;
     mutable Vector<Vector<RT> > m_volinv; // used by solvability fix
+
+    int m_interpbndry_halfwidth = 2;
 };
 
 template <typename T>
@@ -472,7 +484,9 @@ MLCellLinOpT<MF>::defineBC ()
         bc_data.setVal(0.0);
 
         m_bndry_cor[amrlev]->setBndryValues(*m_crse_cor_br[amrlev], 0, bc_data, 0, 0, ncomp,
-                                            IntVect(this->m_amr_ref_ratio[amrlev-1]));
+                                            IntVect(this->m_amr_ref_ratio[amrlev-1]),
+                                            InterpBndryDataT<MF>::IBD_max_order_DEF,
+                                            m_interpbndry_halfwidth);
 
         Vector<Array<LinOpBCType,AMREX_SPACEDIM> > bclohi
             (ncomp,Array<LinOpBCType,AMREX_SPACEDIM>{{AMREX_D_DECL(BCType::Dirichlet,
@@ -522,7 +536,11 @@ MLCellLinOpT<MF>::setLevelBC (int amrlev, const MF* a_levelbcdata, const MF* rob
     {
         if (this->needsCoarseDataForBC())
         {
-            AMREX_ALWAYS_ASSERT(!this->hasHiddenDimension());
+            // AMREX_ALWAYS_ASSERT(!this->hasHiddenDimension());
+            if (this->hasHiddenDimension()) {
+                int hidden_dir = this->hiddenDirection();
+                AMREX_ALWAYS_ASSERT(this->m_coarse_data_crse_ratio[hidden_dir] == 1);
+            }
             br_ref_ratio = this->m_coarse_data_crse_ratio.allGT(0) ? this->m_coarse_data_crse_ratio : IntVect(2);
             if (m_crse_sol_br[amrlev] == nullptr && br_ref_ratio.allGT(0))
             {
@@ -544,7 +562,9 @@ MLCellLinOpT<MF>::setLevelBC (int amrlev, const MF* a_levelbcdata, const MF* rob
                 m_crse_sol_br[amrlev]->setVal(RT(0.0));
             }
             m_bndry_sol[amrlev]->setBndryValues(*m_crse_sol_br[amrlev], 0,
-                                                bcdata, 0, 0, ncomp, br_ref_ratio);
+                                                bcdata, 0, 0, ncomp, br_ref_ratio,
+                                                InterpBndryDataT<MF>::IBD_max_order_DEF,
+                                                m_interpbndry_halfwidth);
             br_ref_ratio = this->m_coarse_data_crse_ratio;
         }
         else
@@ -639,7 +659,9 @@ MLCellLinOpT<MF>::updateSolBC (int amrlev, const MF& crse_bcdata) const
     m_crse_sol_br[amrlev]->copyFrom(crse_bcdata, 0, 0, 0, ncomp,
                                     this->m_geom[amrlev-1][0].periodicity());
     m_bndry_sol[amrlev]->updateBndryValues(*m_crse_sol_br[amrlev], 0, 0, ncomp,
-                                           IntVect(this->m_amr_ref_ratio[amrlev-1]));
+                                           IntVect(this->m_amr_ref_ratio[amrlev-1]),
+                                           InterpBndryDataT<MF>::IBD_max_order_DEF,
+                                           m_interpbndry_halfwidth);
 }
 
 template <typename MF>
@@ -652,7 +674,9 @@ MLCellLinOpT<MF>::updateCorBC (int amrlev, const MF& crse_bcdata) const
     m_crse_cor_br[amrlev]->copyFrom(crse_bcdata, 0, 0, 0, ncomp,
                                     this->m_geom[amrlev-1][0].periodicity());
     m_bndry_cor[amrlev]->updateBndryValues(*m_crse_cor_br[amrlev], 0, 0, ncomp,
-                                           IntVect(this->m_amr_ref_ratio[amrlev-1]));
+                                           IntVect(this->m_amr_ref_ratio[amrlev-1]),
+                                           InterpBndryDataT<MF>::IBD_max_order_DEF,
+                                           m_interpbndry_halfwidth);
 }
 
 template <typename MF>
@@ -1208,6 +1232,15 @@ MLCellLinOpT<MF>::solutionResidual (int amrlev, MF& resid, MF& x, const MF& b,
 
     AMREX_ASSERT(resid.nComp() == b.nComp());
     MF::Xpay(resid, RT(-1.0), b, 0, 0, ncomp, IntVect(0));
+}
+
+template <typename MF>
+void
+MLCellLinOpT<MF>::prepareForFluxes (int amrlev, const MF* crse_bcdata)
+{
+    if (crse_bcdata != nullptr) {
+        updateSolBC(amrlev, *crse_bcdata);
+    }
 }
 
 template <typename MF>
@@ -1917,8 +1950,6 @@ MLCellLinOpT<MF>::computeVolInv () const
         m_volinv[amrlev].resize(this->NMGLevels(amrlev));
     }
 
-    AMREX_ASSERT(this->m_coarse_fine_bc_type == LinOpBCType::Dirichlet || ! this->hasHiddenDimension());
-
     // We don't need to compute for every level
 
     auto f = [&] (int amrlev, int mglev) {
@@ -1980,11 +2011,11 @@ MLCellLinOpT<MF>::normInf (int amrlev, MF const& mf, bool local) const -> RT
     const int finest_level = this->NAMRLevels() - 1;
     RT norm = RT(0.0);
 #ifdef AMREX_USE_EB
-    if (! mf.isAllRegular()) {
+    const auto *factory = dynamic_cast<EBFArrayBoxFactory const*>(this->Factory(amrlev));
+    if (factory && !factory->isAllRegular()) {
         if constexpr (!std::is_same<MF,MultiFab>()) {
             amrex::Abort("MLCellLinOpT with EB only works with MultiFab");
         } else {
-            const auto *factory = dynamic_cast<EBFArrayBoxFactory const*>(this->Factory(amrlev));
             const MultiFab& vfrac = factory->getVolFrac();
             if (amrlev == finest_level) {
 #ifdef AMREX_USE_GPU

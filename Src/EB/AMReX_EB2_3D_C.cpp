@@ -101,7 +101,9 @@ void set_eb_data (const int i, const int j, const int k,
     bnorm(i,j,k,0) = nx;
     bnorm(i,j,k,1) = ny;
     bnorm(i,j,k,2) = nz;
-    barea(i,j,k) = (nx*dapx/(dx[1]*dx[2]) + ny*dapy/(dx[0]*dx[2]) + nz*dapz/(dx[0]*dx[1]));
+    barea(i,j,k) = (nx*dapx + ny*dapy + nz*dapz) / std::sqrt(Math::powi<2>(nx*dx[1]*dx[2]) +
+                                                             Math::powi<2>(ny*dx[0]*dx[2]) +
+                                                             Math::powi<2>(nz*dx[0]*dx[1]));
 
     Real aax = 0.5_rt*(axm+axp);
     Real aay = 0.5_rt*(aym+ayp);
@@ -766,7 +768,8 @@ int build_faces (Box const& bx, Array4<EBCellFlag> const& cell,
                 }
             });
         } else {
-            amrex::Abort("amrex::EB2::build_faces: more than 2 cuts not supported");
+            amrex::Abort("amrex::EB2::build_faces: more than 2 cuts not supported. "
+                         "You can try to fix it by using runtime parameter eb2.cover_multiple_cuts=1.");
         }
     }
 
@@ -930,7 +933,8 @@ void build_cells (Box const& bx, Array4<EBCellFlag> const& cell,
 
     if (nsmallcells > 0 || nmulticuts > 0) {
         if (!cover_multiple_cuts && nmulticuts > 0) {
-            amrex::Abort("amrex::EB2::build_cells: multi-cuts not supported");
+            amrex::Abort("amrex::EB2::build_cells: multi-cuts not supported. "
+                         "You can try to fix it by using runtime parameter eb2.cover_multiple_cuts=1.");
         }
         return;
     } else {

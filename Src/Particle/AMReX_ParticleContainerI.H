@@ -1,5 +1,9 @@
-#include <type_traits>
 #include <AMReX_MakeParticle.H>
+
+#include <string>
+#include <type_traits>
+#include <vector>
+
 
 template <typename ParticleType, int NArrayReal, int NArrayInt,
           template<class> class Allocator, class CellAssignor>
@@ -59,8 +63,39 @@ ParticleContainer_impl<ParticleType, NArrayReal, NArrayInt, Allocator, CellAssig
         pp.query("use_prepost", usePrePost);
         pp.query("do_unlink", doUnlink);
         pp.queryAdd("do_mem_efficient_sort", memEfficientSort);
+        pp.queryAdd("use_comms_arena", use_comms_arena);
+
+        // add default names for SoA Real and Int compile-time arguments
+        for (int i=0; i<NArrayReal; ++i)
+        {
+            m_soa_rdata_names.push_back(getDefaultCompNameReal<ParticleType>(i));
+        }
+        for (int i=0; i<NArrayInt; ++i)
+        {
+            m_soa_idata_names.push_back(getDefaultCompNameInt<ParticleType>(i));
+        }
 
         initialized = true;
+    }
+}
+
+template <typename ParticleType, int NArrayReal, int NArrayInt,
+        template<class> class Allocator, class CellAssignor>
+void
+ParticleContainer_impl<ParticleType, NArrayReal, NArrayInt, Allocator, CellAssignor> :: SetSoACompileTimeNames (
+    std::vector<std::string> const & rdata_name, std::vector<std::string> const & idata_name
+)
+{
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(rdata_name.size() == NArrayReal, "rdata_name must be equal to NArrayReal");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(idata_name.size() == NArrayInt, "idata_name must be equal to NArrayInt");
+
+    for (int i=0; i<NArrayReal; ++i)
+    {
+        m_soa_rdata_names.at(i) = rdata_name.at(i);
+    }
+    for (int i=0; i<NArrayInt; ++i)
+    {
+        m_soa_idata_names.at(i) = idata_name.at(i);
     }
 }
 
@@ -585,7 +620,7 @@ ParticleContainer_impl<ParticleType, NArrayReal, NArrayInt, Allocator, CellAssig
         [=] AMREX_GPU_DEVICE (const typename ParticleTileType::ConstParticleTileDataType& ptd, int ip,
                               amrex::Array4<amrex::Real> const& count)
         {
-            const auto& p = make_particle<ConstParticleType>{}(ptd, ip);
+            const auto p = make_particle<ConstParticleType>{}(ptd, ip);
             CellAssignor assignor;
             IntVect iv = assignor(p, plo, dxi, domain);
             amrex::Gpu::Atomic::AddNoRet(&count(iv), 1.0_rt);
@@ -1161,7 +1196,7 @@ ParticleContainer_impl<ParticleType, NArrayReal, NArrayInt, Allocator, CellAssig
         }
     } else {
         ParticleTileType ptile_tmp;
-        ptile_tmp.define(m_num_runtime_real, m_num_runtime_int);
+        ptile_tmp.define(m_num_runtime_real, m_num_runtime_int, &m_soa_rdata_names, &m_soa_idata_names);
         ptile_tmp.resize(np_total);
         // copy re-ordered particles
         gatherParticles(ptile_tmp, ptile, np, permutations);
@@ -1354,8 +1389,14 @@ ParticleContainer_impl<ParticleType, NArrayReal, NArrayInt, Allocator, CellAssig
     plan.build(*this, op, h_redistribute_int_comp,
                h_redistribute_real_comp, local);
 
+    // by default, this uses The_Arena();
     amrex::PODVector<char, PolymorphicArenaAllocator<char> > snd_buffer;
-    Gpu::DeviceVector<char> rcv_buffer;
+    amrex::PODVector<char, PolymorphicArenaAllocator<char> > rcv_buffer;
+
+    if (use_comms_arena) {
+        snd_buffer.setArena(The_Comms_Arena());
+        rcv_buffer.setArena(The_Comms_Arena());
+    }
 
     packBuffer(*this, op, plan, snd_buffer);
 
@@ -1498,7 +1539,7 @@ ParticleContainer_impl<ParticleType, NArrayReal, NArrayInt, Allocator, CellAssig
             tmp_local[lev][index].resize(num_threads);
             soa_local[lev][index].resize(num_threads);
             for (int t = 0; t < num_threads; ++t) {
-                soa_local[lev][index][t].define(m_num_runtime_real, m_num_runtime_int);
+                soa_local[lev][index][t].define(m_num_runtime_real, m_num_runtime_int, &m_soa_rdata_names, &m_soa_idata_names);
             }
         }
     }

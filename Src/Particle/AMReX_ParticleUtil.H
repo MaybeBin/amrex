@@ -356,6 +356,46 @@ struct GetParticleBin
     }
 };
 
+/**
+ * \brief Returns the cell index for a given particle using the
+ * provided lower bounds and cell sizes.
+ *
+ * This version indexes cells starting from 0 at the lower left corner of
+ * the provided lower bounds, i.e., it returns a local index.
+ *
+ * \tparam P a type of AMReX particle.
+ *
+ * \param p the particle for which the cell index is calculated
+ * \param plo the low end of the domain
+ * \param dxi cell sizes in each dimension
+ */
+template <typename P>
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+IntVect getParticleCell (P const& p,
+                         amrex::GpuArray<amrex::Real,AMREX_SPACEDIM> const& plo,
+                         amrex::GpuArray<amrex::Real,AMREX_SPACEDIM> const& dxi) noexcept
+{
+    IntVect iv(
+        AMREX_D_DECL(int(amrex::Math::floor((p.pos(0)-plo[0])*dxi[0])),
+                     int(amrex::Math::floor((p.pos(1)-plo[1])*dxi[1])),
+                     int(amrex::Math::floor((p.pos(2)-plo[2])*dxi[2]))));
+    return iv;
+}
+
+/**
+ * \brief Returns the cell index for a given particle using the
+ * provided lower bounds, cell sizes and global domain offset.
+ *
+ * This version indexes cells starting from 0 at the lower left corner of
+ * the simulation geometry, i.e., it returns a global index.
+ *
+ * \tparam P a type of AMReX particle.
+ *
+ * \param p the particle for which the cell index is calculated
+ * \param plo the low end of the domain
+ * \param dxi cell sizes in each dimension
+ * \param domain AMReX box in which the given particle resides
+ */
 template <typename P>
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 IntVect getParticleCell (P const& p,
@@ -363,10 +403,7 @@ IntVect getParticleCell (P const& p,
                          amrex::GpuArray<amrex::Real,AMREX_SPACEDIM> const& dxi,
                          const Box& domain) noexcept
 {
-    IntVect iv(
-        AMREX_D_DECL(int(amrex::Math::floor((p.pos(0)-plo[0])*dxi[0])),
-                     int(amrex::Math::floor((p.pos(1)-plo[1])*dxi[1])),
-                     int(amrex::Math::floor((p.pos(2)-plo[2])*dxi[2]))));
+    IntVect iv = getParticleCell(p, plo, dxi);
     iv += domain.smallEnd();
     return iv;
 }
@@ -833,7 +870,7 @@ void PermutationForDeposition (Gpu::DeviceVector<index_type>& perm, index_type n
     PermutationForDeposition<index_type>(perm, nitems, bx.numPts() * ref_product,
         [=] AMREX_GPU_DEVICE (index_type idx) noexcept
             {
-                const auto& p = make_particle<ParticleType>{}(ptd,idx);
+                const auto p = make_particle<ParticleType>{}(ptd,idx);
 
                 IntVect iv = ((p.pos() - pos_offset) * dxi).round();
 
@@ -846,6 +883,26 @@ void PermutationForDeposition (Gpu::DeviceVector<index_type>& perm, index_type n
         });
 }
 
+template <typename P>
+std::string getDefaultCompNameReal (const int i) {
+    int first_r_name = 0;
+    if constexpr (P::is_soa_particle) {
+        if (i < AMREX_SPACEDIM) {
+            constexpr int x_in_ascii = 120;
+            std::string const name{char(x_in_ascii+i)};
+            return name;
+        }
+        first_r_name = AMREX_SPACEDIM;
+    }
+    std::string const name{("real_comp" + std::to_string(i-first_r_name))};
+    return name;
+}
+
+template <typename P>
+std::string getDefaultCompNameInt (const int i) {
+    std::string const name{("int_comp" + std::to_string(i))};
+    return name;
+}
 
 #ifdef AMREX_USE_HDF5_ASYNC
 void async_vol_es_wait_particle();

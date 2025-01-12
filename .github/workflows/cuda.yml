@@ -7,10 +7,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check_changes:
+    uses: ./.github/workflows/check_changes.yml
+
   # Build libamrex and all tests with CUDA 11.2
   tests-cuda11:
     name: CUDA@11.2 GNU@9.3.0 C++17 Release [tests]
     runs-on: ubuntu-20.04
+    needs: check_changes
+    if: needs.check_changes.outputs.has_non_docs_changes == 'true'
     steps:
     - uses: actions/checkout@v4
     - name: Dependencies
@@ -38,6 +43,7 @@ jobs:
 
         cmake -S . -B build                              \
             -DCMAKE_VERBOSE_MAKEFILE=ON                  \
+            -DAMReX_FFT=ON                               \
             -DAMReX_EB=ON                                \
             -DAMReX_ENABLE_TESTS=ON                      \
             -DAMReX_FORTRAN=OFF                          \
@@ -61,6 +67,8 @@ jobs:
   tests-cuda11-clang:
     name: Clang@15 CUDA@11.7 C++17 Release [tests]
     runs-on: ubuntu-22.04
+    needs: check_changes
+    if: needs.check_changes.outputs.has_non_docs_changes == 'true'
     env:
       CC: clang-15
       CXX: clang++-15
@@ -97,6 +105,7 @@ jobs:
         cmake -S . -B build                              \
             -DCMAKE_VERBOSE_MAKEFILE=ON                  \
             -DAMReX_MPI=OFF                              \
+            -DAMReX_FFT=ON                               \
             -DAMReX_EB=ON                                \
             -DAMReX_ENABLE_TESTS=ON                      \
             -DAMReX_FORTRAN=OFF                          \
@@ -113,6 +122,8 @@ jobs:
   tests-nvhpc-nvcc:
     name: NVHPC NVCC/NVC++ C++17 Release [tests]
     runs-on: ubuntu-20.04
+    needs: check_changes
+    if: needs.check_changes.outputs.has_non_docs_changes == 'true'
     steps:
     - uses: actions/checkout@v4
     - name: Dependencies
@@ -153,7 +164,9 @@ jobs:
             -DCMAKE_VERBOSE_MAKEFILE=ON                  \
             -DAMReX_ENABLE_TESTS=ON                      \
             -DAMReX_TEST_TYPE=Small                      \
+            -DAMReX_FFT=ON                               \
             -DAMReX_FORTRAN=ON                           \
+            -DAMReX_FORTRAN_INTERFACES=ON                \
             -DAMReX_GPU_BACKEND=CUDA                     \
             -DCMAKE_C_COMPILER=$(which nvc)              \
             -DCMAKE_CXX_COMPILER=$(which nvc++)          \
@@ -174,6 +187,8 @@ jobs:
   configure-3d-cuda:
     name: CUDA@11.2 GNU@9.3.0 [configure 3D]
     runs-on: ubuntu-20.04
+    needs: check_changes
+    if: needs.check_changes.outputs.has_non_docs_changes == 'true'
     steps:
     - uses: actions/checkout@v4
     - name: Dependencies
@@ -195,7 +210,7 @@ jobs:
         ccache -z
 
         export PATH=/usr/local/nvidia/bin:/usr/local/cuda/bin:${PATH}
-        ./configure --dim 3 --with-cuda yes --enable-eb yes --enable-xsdk-defaults yes --with-fortran no
+        ./configure --dim 3 --with-cuda yes --enable-eb yes --enable-xsdk-defaults yes --with-fortran no --enable-fft yes
         #
         # /home/runner/work/amrex/amrex/Src/Base/AMReX_GpuLaunchGlobal.H:16:41: error: unused parameter ‘f0’ [-Werror=unused-parameter]
         #    16 |     AMREX_GPU_GLOBAL void launch_global (L f0) { f0(); }
@@ -205,18 +220,3 @@ jobs:
 
         ccache -s
         du -hs ~/.cache/ccache
-
-  save_pr_number:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Save PR number
-        env:
-          PR_NUMBER: ${{ github.event.number }}
-        run: |
-          echo $PR_NUMBER > pr_number.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pr_number
-          path: pr_number.txt
-          retention-days: 1
