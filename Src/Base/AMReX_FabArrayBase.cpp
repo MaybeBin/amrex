@@ -345,7 +345,7 @@ FabArrayBase::CPC::define (const BoxArray& ba_dst, const DistributionMapping& dm
 
         std::vector< std::pair<int,Box> > isects;
 
-        const std::vector<IntVect>& pshifts = m_period.shiftIntVect();
+        const std::vector<IntVect>& pshifts = m_period.shiftIntVect(ng_dst);
 
         auto& send_tags = *m_SndTags;
 
@@ -672,7 +672,7 @@ FabArrayBase::define_fb_metadata (CommMetaData& cmd, const IntVect& nghost,
     const IntVect ng_ng =nghost - 1;
     std::vector< std::pair<int,Box> > isects;
 
-    const std::vector<IntVect>& pshifts = period.shiftIntVect();
+    const std::vector<IntVect>& pshifts = period.shiftIntVect(nghost);
 
     auto& send_tags = *cmd.m_SndTags;
 
@@ -901,7 +901,7 @@ FabArrayBase::FB::define_epo (const FabArrayBase& fa)
     const IndexType& typ = ba.ixType();
     std::vector< std::pair<int,Box> > isects;
 
-    const std::vector<IntVect>& pshifts = m_period.shiftIntVect();
+    const std::vector<IntVect>& pshifts = m_period.shiftIntVect(ng);
 
     auto& send_tags = *m_SndTags;
 
@@ -1053,7 +1053,7 @@ void FabArrayBase::FB::tag_one_box (int krcv, BoxArray const& ba, DistributionMa
 
     std::vector<std::pair<int,Box> > isects2;
     std::vector<std::tuple<int,Box,IntVect> > isects3;
-    auto const& pshifts = m_period.shiftIntVect();
+    auto const& pshifts = m_period.shiftIntVect(m_ngrow);
     for (auto const& shft: pshifts) {
         ba.intersections(gbx+shft, isects2);
         for (auto const& is2 : isects2) {
@@ -1144,7 +1144,7 @@ FabArrayBase::FB::define_os (const FabArrayBase& fa)
 
 #ifdef AMREX_USE_MPI
     if (ParallelDescriptor::NProcs() > 1) {
-        const std::vector<IntVect>& pshifts = m_period.shiftIntVect();
+        const std::vector<IntVect>& pshifts = m_period.shiftIntVect(m_ngrow);
         std::vector< std::pair<int,Box> > isects;
 
         std::set<int> my_receiver;
@@ -2337,7 +2337,7 @@ FabArrayBase::buildTileArray (const IntVect& tileSize, TileArray& ta) const
                 ntiles *= nt_in_fab[d];
             }
 
-            IntVect small, big, ijk;  // note that the initial values are all zero.
+            IntVect sml, big, ijk;  // note that the initial values are all zero.
             ijk[0] = -1;
             for (int t = 0; t < ntiles; ++t) {
                 ta.indexMap.push_back(K);
@@ -2356,15 +2356,15 @@ FabArrayBase::buildTileArray (const IntVect& tileSize, TileArray& ta) const
 
                 for (int d=0; d<AMREX_SPACEDIM; d++) {
                     if (ijk[d] < nleft[d]) {
-                        small[d] = ijk[d]*(tsize[d]+1);
-                        big[d] = small[d] + tsize[d];
+                        sml[d] = ijk[d]*(tsize[d]+1);
+                        big[d] = sml[d] + tsize[d];
                     } else {
-                        small[d] = ijk[d]*tsize[d] + nleft[d];
-                        big[d] = small[d] + tsize[d] - 1;
+                        sml[d] = ijk[d]*tsize[d] + nleft[d];
+                        big[d] = sml[d] + tsize[d] - 1;
                     }
                 }
 
-                Box tbx(small, big, IndexType::TheCellType());
+                Box tbx(sml, big, IndexType::TheCellType());
                 tbx.shift(bx.smallEnd());
 
                 ta.tileArray.push_back(tbx);

@@ -672,6 +672,27 @@ MLABecLaplacianT<MF>::averageDownCoeffsSameAmrLevel (int amrlev, Vector<MF>& a,
                              auto const& by = b[mglev][1].array(mfi);,
                              auto const& bz = b[mglev][2].array(mfi));
                 auto const& osm = this->m_overset_mask[amrlev][mglev]->const_array(mfi);
+#if defined(AMREX_USE_CUDA) && defined(_WIN32)
+                AMREX_GPU_LAUNCH_HOST_DEVICE_LAMBDA_RANGE
+                    (xbx, t_xbx,
+                     {
+                         overset_rescale_bcoef_x(t_xbx, bx, osm, ncomp, osfac);
+                     });
+#if (AMREX_SPACEDIM >= 2)
+                AMREX_GPU_LAUNCH_HOST_DEVICE_LAMBDA_RANGE
+                    (ybx, t_ybx,
+                     {
+                         overset_rescale_bcoef_y(t_ybx, by, osm, ncomp, osfac);
+                     });
+#endif
+#if (AMREX_SPACEDIM == 3)
+                AMREX_GPU_LAUNCH_HOST_DEVICE_LAMBDA_RANGE
+                    (zbx, t_zbx,
+                     {
+                         overset_rescale_bcoef_z(t_zbx, bz, osm, ncomp, osfac);
+                     });
+#endif
+#else
                 AMREX_LAUNCH_HOST_DEVICE_LAMBDA_DIM
                     (xbx, t_xbx,
                      {
@@ -685,6 +706,7 @@ MLABecLaplacianT<MF>::averageDownCoeffsSameAmrLevel (int amrlev, Vector<MF>& a,
                      {
                          overset_rescale_bcoef_z(t_zbx, bz, osm, ncomp, osfac);
                      });
+#endif
             }
         }
     }
@@ -864,6 +886,12 @@ MLABecLaplacianT<MF>::Fsmooth (int amrlev, int mglev, MF& sol, const MF& rhs, in
         regular_coarsening = this->mg_coarsen_ratio_vec[mglev-1] == this->mg_coarsen_ratio;
     }
 
+    MF Ax;
+    if (! this->m_use_gauss_seidel && regular_coarsening) { // jacobi
+        Ax.define(sol.boxArray(), sol.DistributionMap(), sol.nComp(), 0);
+        Fapply(amrlev, mglev, Ax, sol);
+    }
+
     const MF& acoef = m_a_coeffs[amrlev][mglev];
     AMREX_ALWAYS_ASSERT(acoef.nGrowVect() == 0);
     AMREX_D_TERM(const MF& bxcoef = m_b_coeffs[amrlev][mglev][0];,
@@ -939,40 +967,76 @@ MLABecLaplacianT<MF>::Fsmooth (int amrlev, int mglev, MF& sol, const MF& rhs, in
 
         if (this->m_overset_mask[amrlev][mglev]) {
             const auto& osmma = this->m_overset_mask[amrlev][mglev]->const_arrays();
-            ParallelFor(sol, IntVect(0), nc,
-            [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k, int n) noexcept
-            {
-                Box vbx(ama[box_no]);
-                abec_gsrb_os(i,j,k,n, solnma[box_no], rhsma[box_no], alpha, ama[box_no],
-                             AMREX_D_DECL(dhx, dhy, dhz),
-                             AMREX_D_DECL(bxma[box_no],byma[box_no],bzma[box_no]),
-                             AMREX_D_DECL(m0ma[box_no],m2ma[box_no],m4ma[box_no]),
-                             AMREX_D_DECL(m1ma[box_no],m3ma[box_no],m5ma[box_no]),
-                             AMREX_D_DECL(f0ma[box_no],f2ma[box_no],f4ma[box_no]),
-                             AMREX_D_DECL(f1ma[box_no],f3ma[box_no],f5ma[box_no]),
-                             osmma[box_no], vbx, redblack);
-            });
+            if (this->m_use_gauss_seidel) {
+                ParallelFor(sol, IntVect(0), nc,
+                [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k, int n) noexcept
+                {
+                    Box vbx(ama[box_no]);
+                    abec_gsrb_os(i,j,k,n, solnma[box_no], rhsma[box_no], alpha, ama[box_no],
+                                 AMREX_D_DECL(dhx, dhy, dhz),
+                                 AMREX_D_DECL(bxma[box_no],byma[box_no],bzma[box_no]),
+                                 AMREX_D_DECL(m0ma[box_no],m2ma[box_no],m4ma[box_no]),
+                                 AMREX_D_DECL(m1ma[box_no],m3ma[box_no],m5ma[box_no]),
+                                 AMREX_D_DECL(f0ma[box_no],f2ma[box_no],f4ma[box_no]),
+                                 AMREX_D_DECL(f1ma[box_no],f3ma[box_no],f5ma[box_no]),
+                                 osmma[box_no], vbx, redblack);
+                });
+            } else {
+                const auto& axma = Ax.const_arrays();
+                ParallelFor(sol, IntVect(0), nc,
+                [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k, int n) noexcept
+                {
+                    Box vbx(ama[box_no]);
+                    abec_jacobi_os(i,j,k,n, solnma[box_no], rhsma[box_no], axma[box_no],
+                                   alpha, ama[box_no],
+                                   AMREX_D_DECL(dhx, dhy, dhz),
+                                   AMREX_D_DECL(bxma[box_no],byma[box_no],bzma[box_no]),
+                                   AMREX_D_DECL(m0ma[box_no],m2ma[box_no],m4ma[box_no]),
+                                   AMREX_D_DECL(m1ma[box_no],m3ma[box_no],m5ma[box_no]),
+                                   AMREX_D_DECL(f0ma[box_no],f2ma[box_no],f4ma[box_no]),
+                                   AMREX_D_DECL(f1ma[box_no],f3ma[box_no],f5ma[box_no]),
+                                   osmma[box_no], vbx);
+                });
+            }
         } else if (regular_coarsening) {
-            ParallelFor(sol, IntVect(0), nc,
-            [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k, int n) noexcept
-            {
-                Box vbx(ama[box_no]);
-                abec_gsrb(i,j,k,n, solnma[box_no], rhsma[box_no], alpha, ama[box_no],
-                          AMREX_D_DECL(dhx, dhy, dhz),
-                          AMREX_D_DECL(bxma[box_no],byma[box_no],bzma[box_no]),
-                          AMREX_D_DECL(m0ma[box_no],m2ma[box_no],m4ma[box_no]),
-                          AMREX_D_DECL(m1ma[box_no],m3ma[box_no],m5ma[box_no]),
-                          AMREX_D_DECL(f0ma[box_no],f2ma[box_no],f4ma[box_no]),
-                          AMREX_D_DECL(f1ma[box_no],f3ma[box_no],f5ma[box_no]),
-                          vbx, redblack);
-            });
+            if (this->m_use_gauss_seidel) {
+                ParallelFor(sol, IntVect(0), nc,
+                [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k, int n) noexcept
+                {
+                    Box vbx(ama[box_no]);
+                    abec_gsrb(i,j,k,n, solnma[box_no], rhsma[box_no], alpha, ama[box_no],
+                              AMREX_D_DECL(dhx, dhy, dhz),
+                              AMREX_D_DECL(bxma[box_no],byma[box_no],bzma[box_no]),
+                              AMREX_D_DECL(m0ma[box_no],m2ma[box_no],m4ma[box_no]),
+                              AMREX_D_DECL(m1ma[box_no],m3ma[box_no],m5ma[box_no]),
+                              AMREX_D_DECL(f0ma[box_no],f2ma[box_no],f4ma[box_no]),
+                              AMREX_D_DECL(f1ma[box_no],f3ma[box_no],f5ma[box_no]),
+                              vbx, redblack);
+                });
+            } else {
+                const auto& axma = Ax.const_arrays();
+                ParallelFor(sol, IntVect(0), nc,
+                [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k, int n) noexcept
+                {
+                    Box vbx(ama[box_no]);
+                    abec_jacobi(i,j,k,n, solnma[box_no], rhsma[box_no], axma[box_no],
+                                alpha, ama[box_no],
+                                AMREX_D_DECL(dhx, dhy, dhz),
+                                AMREX_D_DECL(bxma[box_no],byma[box_no],bzma[box_no]),
+                                AMREX_D_DECL(m0ma[box_no],m2ma[box_no],m4ma[box_no]),
+                                AMREX_D_DECL(m1ma[box_no],m3ma[box_no],m5ma[box_no]),
+                                AMREX_D_DECL(f0ma[box_no],f2ma[box_no],f4ma[box_no]),
+                                AMREX_D_DECL(f1ma[box_no],f3ma[box_no],f5ma[box_no]),
+                                vbx);
+                });
+            }
         }
         Gpu::streamSynchronize();
     } else
 #endif
     {
         MFItInfo mfi_info;
-        if (Gpu::notInLaunchRegion()) { mfi_info.EnableTiling().SetDynamic(true); }
+        mfi_info.EnableTiling().SetDynamic(true);
 
 #ifdef AMREX_USE_OMP
 #pragma omp parallel if (Gpu::notInLaunchRegion())
@@ -1013,43 +1077,71 @@ MLABecLaplacianT<MF>::Fsmooth (int amrlev, int mglev, MF& sol, const MF& rhs, in
 
             if (this->m_overset_mask[amrlev][mglev]) {
                 const auto& osm = this->m_overset_mask[amrlev][mglev]->const_array(mfi);
-                AMREX_HOST_DEVICE_PARALLEL_FOR_4D(tbx, nc, i, j, k, n,
-                {
-                    abec_gsrb_os(i,j,k,n, solnfab, rhsfab, alpha, afab,
-                                 AMREX_D_DECL(dhx, dhy, dhz),
-                                 AMREX_D_DECL(bxfab, byfab, bzfab),
-                                 AMREX_D_DECL(m0,m2,m4),
-                                 AMREX_D_DECL(m1,m3,m5),
-                                 AMREX_D_DECL(f0fab,f2fab,f4fab),
-                                 AMREX_D_DECL(f1fab,f3fab,f5fab),
-                                 osm, vbx, redblack);
-                });
+                if (this->m_use_gauss_seidel) {
+                    AMREX_LOOP_4D(tbx, nc, i, j, k, n,
+                    {
+                        abec_gsrb_os(i,j,k,n, solnfab, rhsfab, alpha, afab,
+                                     AMREX_D_DECL(dhx, dhy, dhz),
+                                     AMREX_D_DECL(bxfab, byfab, bzfab),
+                                     AMREX_D_DECL(m0,m2,m4),
+                                     AMREX_D_DECL(m1,m3,m5),
+                                     AMREX_D_DECL(f0fab,f2fab,f4fab),
+                                     AMREX_D_DECL(f1fab,f3fab,f5fab),
+                                     osm, vbx, redblack);
+                    });
+                } else {
+                    const auto& axfab = Ax.const_array(mfi);
+                    AMREX_LOOP_4D(tbx, nc, i, j, k, n,
+                    {
+                        abec_jacobi_os(i,j,k,n, solnfab, rhsfab, axfab,
+                                       alpha, afab,
+                                       AMREX_D_DECL(dhx, dhy, dhz),
+                                       AMREX_D_DECL(bxfab, byfab, bzfab),
+                                       AMREX_D_DECL(m0,m2,m4),
+                                       AMREX_D_DECL(m1,m3,m5),
+                                       AMREX_D_DECL(f0fab,f2fab,f4fab),
+                                       AMREX_D_DECL(f1fab,f3fab,f5fab),
+                                       osm, vbx);
+                    });
+                }
             } else if (regular_coarsening) {
-                AMREX_HOST_DEVICE_PARALLEL_FOR_4D(tbx, nc, i, j, k, n,
-                {
-                    abec_gsrb(i,j,k,n, solnfab, rhsfab, alpha, afab,
-                              AMREX_D_DECL(dhx, dhy, dhz),
-                              AMREX_D_DECL(bxfab, byfab, bzfab),
-                              AMREX_D_DECL(m0,m2,m4),
-                              AMREX_D_DECL(m1,m3,m5),
-                              AMREX_D_DECL(f0fab,f2fab,f4fab),
-                              AMREX_D_DECL(f1fab,f3fab,f5fab),
-                              vbx, redblack);
-                });
+                if (this->m_use_gauss_seidel) {
+                    AMREX_LOOP_4D(tbx, nc, i, j, k, n,
+                    {
+                        abec_gsrb(i,j,k,n, solnfab, rhsfab, alpha, afab,
+                                  AMREX_D_DECL(dhx, dhy, dhz),
+                                  AMREX_D_DECL(bxfab, byfab, bzfab),
+                                  AMREX_D_DECL(m0,m2,m4),
+                                  AMREX_D_DECL(m1,m3,m5),
+                                  AMREX_D_DECL(f0fab,f2fab,f4fab),
+                                  AMREX_D_DECL(f1fab,f3fab,f5fab),
+                                  vbx, redblack);
+                    });
+                } else {
+                    const auto& axfab = Ax.const_array(mfi);
+                    AMREX_LOOP_4D(tbx, nc, i, j, k, n,
+                    {
+                        abec_jacobi(i,j,k,n, solnfab, rhsfab, axfab,
+                                    alpha, afab,
+                                    AMREX_D_DECL(dhx, dhy, dhz),
+                                    AMREX_D_DECL(bxfab, byfab, bzfab),
+                                    AMREX_D_DECL(m0,m2,m4),
+                                    AMREX_D_DECL(m1,m3,m5),
+                                    AMREX_D_DECL(f0fab,f2fab,f4fab),
+                                    AMREX_D_DECL(f1fab,f3fab,f5fab),
+                                    vbx);
+                    });
+                }
             } else {
-                Gpu::LaunchSafeGuard lsg(false); // xxxxx gpu todo
                 // line solve does not with with GPU
-                AMREX_LAUNCH_HOST_DEVICE_LAMBDA ( tbx, thread_box,
-                {
-                    abec_gsrb_with_line_solve(thread_box, solnfab, rhsfab, alpha, afab,
-                                              AMREX_D_DECL(dhx, dhy, dhz),
-                                              AMREX_D_DECL(bxfab, byfab, bzfab),
-                                              AMREX_D_DECL(m0,m2,m4),
-                                              AMREX_D_DECL(m1,m3,m5),
-                                              AMREX_D_DECL(f0fab,f2fab,f4fab),
-                                              AMREX_D_DECL(f1fab,f3fab,f5fab),
-                                              vbx, redblack, nc);
-                });
+                abec_gsrb_with_line_solve(tbx, solnfab, rhsfab, alpha, afab,
+                                          AMREX_D_DECL(dhx, dhy, dhz),
+                                          AMREX_D_DECL(bxfab, byfab, bzfab),
+                                          AMREX_D_DECL(m0,m2,m4),
+                                          AMREX_D_DECL(m1,m3,m5),
+                                          AMREX_D_DECL(f0fab,f2fab,f4fab),
+                                          AMREX_D_DECL(f1fab,f3fab,f5fab),
+                                          vbx, redblack, nc);
             }
         }
     }
@@ -1094,7 +1186,7 @@ MLABecLaplacianT<MF>::FFlux (Box const& box, Real const* dxinv, RT bscalar,
         RT fac = bscalar*static_cast<RT>(dxinv[0]);
         Box blo = amrex::bdryLo(box, 0);
         int blen = box.length(0);
-        AMREX_LAUNCH_HOST_DEVICE_LAMBDA ( blo, tbox,
+        AMREX_GPU_LAUNCH_HOST_DEVICE_LAMBDA_RANGE ( blo, tbox,
         {
             mlabeclap_flux_xface(tbox, fxarr, solarr, bx, fac, blen, ncomp);
         });
@@ -1102,7 +1194,7 @@ MLABecLaplacianT<MF>::FFlux (Box const& box, Real const* dxinv, RT bscalar,
         fac = bscalar*static_cast<RT>(dxinv[1]);
         blo = amrex::bdryLo(box, 1);
         blen = box.length(1);
-        AMREX_LAUNCH_HOST_DEVICE_LAMBDA ( blo, tbox,
+        AMREX_GPU_LAUNCH_HOST_DEVICE_LAMBDA_RANGE ( blo, tbox,
         {
             mlabeclap_flux_yface(tbox, fyarr, solarr, by, fac, blen, ncomp);
         });
@@ -1111,7 +1203,7 @@ MLABecLaplacianT<MF>::FFlux (Box const& box, Real const* dxinv, RT bscalar,
         fac = bscalar*static_cast<RT>(dxinv[2]);
         blo = amrex::bdryLo(box, 2);
         blen = box.length(2);
-        AMREX_LAUNCH_HOST_DEVICE_LAMBDA ( blo, tbox,
+        AMREX_GPU_LAUNCH_HOST_DEVICE_LAMBDA_RANGE ( blo, tbox,
         {
             mlabeclap_flux_zface(tbox, fzarr, solarr, bz, fac, blen, ncomp);
         });
@@ -1121,14 +1213,14 @@ MLABecLaplacianT<MF>::FFlux (Box const& box, Real const* dxinv, RT bscalar,
     {
         RT fac = bscalar*static_cast<RT>(dxinv[0]);
         Box bflux = amrex::surroundingNodes(box, 0);
-        AMREX_LAUNCH_HOST_DEVICE_LAMBDA ( bflux, tbox,
+        AMREX_GPU_LAUNCH_HOST_DEVICE_LAMBDA_RANGE ( bflux, tbox,
         {
             mlabeclap_flux_x(tbox, fxarr, solarr, bx, fac, ncomp);
         });
 #if (AMREX_SPACEDIM >= 2)
         fac = bscalar*static_cast<RT>(dxinv[1]);
         bflux = amrex::surroundingNodes(box, 1);
-        AMREX_LAUNCH_HOST_DEVICE_LAMBDA ( bflux, tbox,
+        AMREX_GPU_LAUNCH_HOST_DEVICE_LAMBDA_RANGE ( bflux, tbox,
         {
             mlabeclap_flux_y(tbox, fyarr, solarr, by, fac, ncomp);
         });
@@ -1136,7 +1228,7 @@ MLABecLaplacianT<MF>::FFlux (Box const& box, Real const* dxinv, RT bscalar,
 #if (AMREX_SPACEDIM == 3)
         fac = bscalar*static_cast<RT>(dxinv[2]);
         bflux = amrex::surroundingNodes(box, 2);
-        AMREX_LAUNCH_HOST_DEVICE_LAMBDA ( bflux, tbox,
+        AMREX_GPU_LAUNCH_HOST_DEVICE_LAMBDA_RANGE ( bflux, tbox,
         {
             mlabeclap_flux_z(tbox, fzarr, solarr, bz, fac, ncomp);
         });
@@ -1211,7 +1303,7 @@ MLABecLaplacianT<MF>::supportNSolve () const
     bool support = false;
     if (this->m_overset_mask[0][0]) {
         if (this->m_geom[0].back().Domain().coarsenable(MLLinOp::mg_coarsen_ratio,
-                                                        MLLinOp::mg_domain_min_width)
+                                                        this->mg_domain_min_width)
             && this->m_grids[0].back().coarsenable(MLLinOp::mg_coarsen_ratio, MLLinOp::mg_box_min_width))
         {
             support = true;

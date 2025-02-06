@@ -13,8 +13,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check_changes:
+    uses: ./.github/workflows/check_changes.yml
+
   analyze:
-    if: ${{ github.repository == 'AMReX-Codes/amrex' || github.event_name != 'schedule' }}
+    needs: check_changes
+    if: ${{ github.repository == 'AMReX-Codes/amrex' || github.event_name != 'schedule' }} && needs.check_changes.outputs.has_non_docs_changes == 'true'
     name: Analyze
     runs-on: ubuntu-latest
     permissions:
@@ -92,18 +96,3 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{ matrix.language }}"
-
-  save_pr_number:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Save PR number
-        env:
-          PR_NUMBER: ${{ github.event.number }}
-        run: |
-          echo $PR_NUMBER > pr_number.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pr_number
-          path: pr_number.txt
-          retention-days: 1

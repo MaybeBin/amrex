@@ -46,6 +46,8 @@ MyTest::solve ()
     }
     mlcc.prepareRHS({&rhs});
 
+    if (use_pcg) { mlcc.setUsePCG(true); }
+
     using V = Array<MultiFab,3>;
     MLMGT<V> mlmg(mlcc);
     mlmg.setMaxIter(max_iter);
@@ -105,6 +107,7 @@ MyTest::readParameters ()
     pp.query("consolidation", consolidation);
     pp.query("max_coarsening_level", max_coarsening_level);
 
+    pp.query("use_pcg", use_pcg);
     pp.query("use_gmres", use_gmres);
     pp.query("gmres_use_precond", gmres_use_precond);
     pp.query("gmres_precond_niters", gmres_precond_niters);
@@ -132,7 +135,7 @@ MyTest::initData ()
 
     for (int idim = 0; idim < 3; ++idim) {
         IntVect itype(1);
-#if (AMREX_SPACEDIM == 2)
+#if (AMREX_SPACEDIM < 3)
         if (idim < AMREX_SPACEDIM)
 #endif
         {

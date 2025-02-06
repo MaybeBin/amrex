@@ -248,17 +248,17 @@ int getTileIndex (const IntVect& iv, const Box& box, const bool a_do_tiling,
                 thi = tlo + ts_right - 1;
             }
         };
-        const IntVect& small = box.smallEnd();
-        const IntVect& big   = box.bigEnd();
+        const IntVect& sml = box.smallEnd();
+        const IntVect& big = box.bigEnd();
         IntVect ntiles, ivIndex, tilelo, tilehi;
 
-        AMREX_D_TERM(int iv0 = amrex::min(amrex::max(iv[0], small[0]), big[0]);,
-                     int iv1 = amrex::min(amrex::max(iv[1], small[1]), big[1]);,
-                     int iv2 = amrex::min(amrex::max(iv[2], small[2]), big[2]););
+        AMREX_D_TERM(int iv0 = amrex::min(amrex::max(iv[0], sml[0]), big[0]);,
+                     int iv1 = amrex::min(amrex::max(iv[1], sml[1]), big[1]);,
+                     int iv2 = amrex::min(amrex::max(iv[2], sml[2]), big[2]););
 
-        AMREX_D_TERM(tiling_1d(iv0, small[0], big[0], a_tile_size[0], ntiles[0], ivIndex[0], tilelo[0], tilehi[0]);,
-                     tiling_1d(iv1, small[1], big[1], a_tile_size[1], ntiles[1], ivIndex[1], tilelo[1], tilehi[1]);,
-                     tiling_1d(iv2, small[2], big[2], a_tile_size[2], ntiles[2], ivIndex[2], tilelo[2], tilehi[2]););
+        AMREX_D_TERM(tiling_1d(iv0, sml[0], big[0], a_tile_size[0], ntiles[0], ivIndex[0], tilelo[0], tilehi[0]);,
+                     tiling_1d(iv1, sml[1], big[1], a_tile_size[1], ntiles[1], ivIndex[1], tilelo[1], tilehi[1]);,
+                     tiling_1d(iv2, sml[2], big[2], a_tile_size[2], ntiles[2], ivIndex[2], tilelo[2], tilehi[2]););
 
         tbx = Box(tilelo, tilehi);
 
@@ -280,13 +280,13 @@ int numTilesInBox (const Box& box, const bool a_do_tiling, const IntVect& a_tile
             ntile = amrex::max(ncells/tilesize, 1);
         };
 
-        const IntVect& small = box.smallEnd();
-        const IntVect& big   = box.bigEnd();
+        const IntVect& sml = box.smallEnd();
+        const IntVect& big = box.bigEnd();
         IntVect ntiles;
 
-        AMREX_D_TERM(tiling_1d(small[0], big[0], a_tile_size[0], ntiles[0]);,
-                     tiling_1d(small[1], big[1], a_tile_size[1], ntiles[1]);,
-                     tiling_1d(small[2], big[2], a_tile_size[2], ntiles[2]););
+        AMREX_D_TERM(tiling_1d(sml[0], big[0], a_tile_size[0], ntiles[0]);,
+                     tiling_1d(sml[1], big[1], a_tile_size[1], ntiles[1]);,
+                     tiling_1d(sml[2], big[2], a_tile_size[2], ntiles[2]););
 
         return AMREX_D_TERM(ntiles[0], *=ntiles[1], *=ntiles[2]);
     }
@@ -356,6 +356,46 @@ struct GetParticleBin
     }
 };
 
+/**
+ * \brief Returns the cell index for a given particle using the
+ * provided lower bounds and cell sizes.
+ *
+ * This version indexes cells starting from 0 at the lower left corner of
+ * the provided lower bounds, i.e., it returns a local index.
+ *
+ * \tparam P a type of AMReX particle.
+ *
+ * \param p the particle for which the cell index is calculated
+ * \param plo the low end of the domain
+ * \param dxi cell sizes in each dimension
+ */
+template <typename P>
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+IntVect getParticleCell (P const& p,
+                         amrex::GpuArray<amrex::Real,AMREX_SPACEDIM> const& plo,
+                         amrex::GpuArray<amrex::Real,AMREX_SPACEDIM> const& dxi) noexcept
+{
+    IntVect iv(
+        AMREX_D_DECL(int(amrex::Math::floor((p.pos(0)-plo[0])*dxi[0])),
+                     int(amrex::Math::floor((p.pos(1)-plo[1])*dxi[1])),
+                     int(amrex::Math::floor((p.pos(2)-plo[2])*dxi[2]))));
+    return iv;
+}
+
+/**
+ * \brief Returns the cell index for a given particle using the
+ * provided lower bounds, cell sizes and global domain offset.
+ *
+ * This version indexes cells starting from 0 at the lower left corner of
+ * the simulation geometry, i.e., it returns a global index.
+ *
+ * \tparam P a type of AMReX particle.
+ *
+ * \param p the particle for which the cell index is calculated
+ * \param plo the low end of the domain
+ * \param dxi cell sizes in each dimension
+ * \param domain AMReX box in which the given particle resides
+ */
 template <typename P>
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 IntVect getParticleCell (P const& p,
@@ -363,10 +403,7 @@ IntVect getParticleCell (P const& p,
                          amrex::GpuArray<amrex::Real,AMREX_SPACEDIM> const& dxi,
                          const Box& domain) noexcept
 {
-    IntVect iv(
-        AMREX_D_DECL(int(amrex::Math::floor((p.pos(0)-plo[0])*dxi[0])),
-                     int(amrex::Math::floor((p.pos(1)-plo[1])*dxi[1])),
-                     int(amrex::Math::floor((p.pos(2)-plo[2])*dxi[2]))));
+    IntVect iv = getParticleCell(p, plo, dxi);
     iv += domain.smallEnd();
     return iv;
 }
@@ -833,7 +870,7 @@ void PermutationForDeposition (Gpu::DeviceVector<index_type>& perm, index_type n
     PermutationForDeposition<index_type>(perm, nitems, bx.numPts() * ref_product,
         [=] AMREX_GPU_DEVICE (index_type idx) noexcept
             {
-                const auto& p = make_particle<ParticleType>{}(ptd,idx);
+                const auto p = make_particle<ParticleType>{}(ptd,idx);
 
                 IntVect iv = ((p.pos() - pos_offset) * dxi).round();
 
@@ -846,6 +883,26 @@ void PermutationForDeposition (Gpu::DeviceVector<index_type>& perm, index_type n
         });
 }
 
+template <typename P>
+std::string getDefaultCompNameReal (const int i) {
+    int first_r_name = 0;
+    if constexpr (P::is_soa_particle) {
+        if (i < AMREX_SPACEDIM) {
+            constexpr int x_in_ascii = 120;
+            std::string const name{char(x_in_ascii+i)};
+            return name;
+        }
+        first_r_name = AMREX_SPACEDIM;
+    }
+    std::string const name{("real_comp" + std::to_string(i-first_r_name))};
+    return name;
+}
+
+template <typename P>
+std::string getDefaultCompNameInt (const int i) {
+    std::string const name{("int_comp" + std::to_string(i))};
+    return name;
+}
 
 #ifdef AMREX_USE_HDF5_ASYNC
 void async_vol_es_wait_particle();

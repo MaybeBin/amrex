@@ -7,9 +7,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check_changes:
+    uses: ./.github/workflows/check_changes.yml
+
   multid:
     name: GNU Multi-D
     runs-on: ubuntu-latest
+    needs: check_changes
+    if: needs.check_changes.outputs.has_non_docs_changes == 'true'
     steps:
     - uses: actions/checkout@v4
     - name: Dependencies
@@ -29,7 +34,7 @@ jobs:
       run: |
         export CCACHE_COMPRESS=1
         export CCACHE_COMPRESSLEVEL=10
-        export CCACHE_MAXSIZE=40M
+        export CCACHE_MAXSIZE=100M
         export CCACHE_EXTRAFILES=${{ github.workspace }}/.clang-tidy
         export CCACHE_LOGFILE=${{ github.workspace }}/ccache.log.txt
         ccache -z
@@ -63,18 +68,3 @@ jobs:
 
         ccache -s
         du -hs ~/.cache/ccache
-
-  save_pr_number:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Save PR number
-        env:
-          PR_NUMBER: ${{ github.event.number }}
-        run: |
-          echo $PR_NUMBER > pr_number.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pr_number
-          path: pr_number.txt
-          retention-days: 1

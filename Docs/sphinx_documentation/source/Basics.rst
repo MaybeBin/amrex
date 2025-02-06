@@ -419,6 +419,56 @@ will become
     foo.a = 2
     foo.b = 2
 
+Enum Class
+----------
+
+.. versionadded:: 24.09
+   Enum class support in :cpp:`ParmParse`.
+
+AMReX provides a macro :cpp:`AMREX_ENUM` for defining :cpp:`enum class` that
+supports reflection. For example,
+
+.. highlight:: c++
+
+::
+
+   AMREX_ENUM(MyColor, red, green, blue);
+
+   void f ()
+   {
+       MyColor color = amrex::getEnum<MyColor>("red"); // MyColor::red
+       std::string name = amrex::getEnumNameString(MyColor::blue); // "blue"
+       std::vector<std::string> names = amrex::getEnumNameStrings<MyColor>();
+       // names = {"red", "green", "blue"};
+       std::string class_name = amrex::getEnumClassName<MyColor>(); // "MyColor"
+   }
+
+This allows us to read :cpp:`ParmParse` parameters into enum class objects.
+
+.. highlight:: python
+
+::
+
+   color1 = red
+   color2 = BLue
+
+The following code shows how to query the enumerators.
+
+.. highlight:: c++
+
+::
+
+   AMREX_ENUM(MyColor, none, red, green, blue);
+
+   void f (MyColor& c1, MyColor& c2)
+   {
+       ParmParse pp;
+       pp.query("color1", c1); // c1 becomes MyColor::red
+       pp.query_enum_case_insensitive("color2", c2); // c2 becomes MyColor::blue
+       MyColor default_color; // MyColor::none
+       pp.query("color3", default_color); // Still MyColor::none
+   }
+
 Overriding Parameters with Command-Line Arguments
 -------------------------------------------------
 
@@ -545,8 +595,8 @@ numbers can be computed with ``min`` and ``max``, respectively.  It supports
 the Heaviside step function, ``heaviside(x1,x2)`` that gives ``0``, ``x2``,
 ``1``, for ``x1 < 0``, ``x1 = 0`` and ``x1 > 0``, respectively.
 It supports the Bessel function of the first kind of order ``n``
-``jn(n,x)``. Complete elliptic integrals of the first and second kind, ``comp_ellint_1`` and ``comp_ellint_2``,
-are supported only for gcc and CPUs.
+``jn(n,x)``, and the Bessel function of the second kind of order ``n`` ``yn(n,x)``. Complete elliptic integrals of the first and second kind, ``comp_ellint_1(k)`` and ``comp_ellint_2(k)``,
+are supported.
 There is ``if(a,b,c)`` that gives ``b`` or ``c`` depending on the value of
 ``a``.  A number of comparison operators are supported, including ``<``,
 ``>``, ``==``, ``!=``, ``<=``, and ``>=``.  The Boolean results from
@@ -654,7 +704,7 @@ reading from command line or input file.
 
 Because many AMReX classes and functions (including destructors
 inserted by the compiler) do not function properly after
-:cpp:`amrex:Finalize` is called, it's best to put the codes between
+:cpp:`amrex::Finalize` is called, it's best to put the codes between
 :cpp:`amrex::Initialize` and :cpp:`amrex::Finalize` into its scope
 (e.g., a pair of curly braces or a separate function) to make sure
 resources are properly freed.

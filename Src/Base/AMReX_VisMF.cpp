@@ -1,6 +1,7 @@
 
 #include <AMReX_FabArrayUtility.H>
 #include <AMReX_FPC.H>
+#include <AMReX_IOFormat.H>
 #include <AMReX_ParmParse.H>
 #include <AMReX_Utility.H>
 #include <AMReX_VisMF.H>
@@ -8,6 +9,8 @@
 #include <cerrno>
 #include <cstdio>
 #include <limits>
+#include <vector>
+#include <utility>
 
 namespace amrex {
 
@@ -59,6 +62,45 @@ namespace
         }
     }
 #endif
+
+    std::vector<std::pair<std::weak_ptr<BARef>, std::weak_ptr<DMRef>>> s_layout_cache;
+
+    DistributionMapping vismf_make_dm (BoxArray& ba)
+    {
+        auto& ba_ref = ba.getSharedRef();
+
+        std::shared_ptr<DMRef> dm_ref;
+        int ielem = -1;
+        for (auto it = s_layout_cache.begin(); it != s_layout_cache.end(); ) {
+            auto cached_ba = it->first.lock();
+            if (cached_ba) {
+                if (cached_ba->m_abox == ba_ref->m_abox) {
+                    ba_ref = std::move(cached_ba);
+                    dm_ref = it->second.lock();
+                    ielem = int(std::distance(s_layout_cache.begin(), it));
+                    break;
+                }
+                ++it;
+            } else { // expired
+                it = s_layout_cache.erase(it);
+            }
+        }
+
+        auto have_dm_in_cache = bool(dm_ref);
+        ParallelDescriptor::ReduceBoolAnd(have_dm_in_cache);
+        if (have_dm_in_cache) {
+            return DistributionMapping{std::move(dm_ref)};
+        } else {
+            DistributionMapping dm{ba};
+            if (ielem >= 0) {
+                s_layout_cache[ielem].first = ba.getWeakRef();
+                s_layout_cache[ielem].second = dm.getWeakRef();
+            } else {
+                s_layout_cache.emplace_back(ba.getWeakRef(), dm.getWeakRef());
+            }
+            return dm;
+        }
+    }
 }
 
 void
@@ -103,6 +145,7 @@ void
 VisMF::Finalize ()
 {
     initialized = false;
+    s_layout_cache.clear();
 }
 
 void
@@ -277,9 +320,9 @@ operator<< (std::ostream        &os,
     // Up the precision for the Reals in m_min and m_max.
     // Force it to be written in scientific notation to match fParallel code.
     //
-    std::ios::fmtflags oflags = os.flags();
+    IOFormatSaver iofmtsaver(os);
     os.setf(std::ios::floatfield, std::ios::scientific);
-    int oldPrec = static_cast<int>(os.precision(16));
+    os.precision(17);
 
     os << hd.m_vers     << '\n';
     os << int(hd.m_how) << '\n';
@@ -326,9 +369,6 @@ operator<< (std::ostream        &os,
         os << FPC::Ieee32NormalRealDescriptor() << '\n';
       }
     }
-
-    os.flags(oflags);
-    os.precision(oldPrec);
 
     if( ! os.good()) {
         amrex::Error("Write of VisMF::Header failed");
@@ -1544,7 +1584,7 @@ VisMF::Read (FabArray<FArrayBox> &mf,
     }
 
     if (mf.empty()) {
-        DistributionMapping dm(hdr.m_ba);
+        DistributionMapping dm = vismf_make_dm(hdr.m_ba);
         mf.define(hdr.m_ba, dm, hdr.m_ncomp, hdr.m_ngrow, MFInfo(), FArrayBoxFactory());
     } else {
         BL_ASSERT(amrex::match(hdr.m_ba,mf.boxArray()));
@@ -1670,7 +1710,7 @@ VisMF::Read (FabArray<FArrayBox> &mf,
           frcIter = FileReadChains.find(fileName);
           BL_ASSERT(frcIter != FileReadChains.end());
           Vector<FabReadLink> &frc = frcIter->second;
-          for(NFilesIter nfi(std::move(fullFileName), readRanks); nfi.ReadyToRead(); ++nfi) {
+          for(NFilesIter nfi(std::move(fullFileName), std::move(readRanks)); nfi.ReadyToRead(); ++nfi) {
 
               // ---- confirm the data is contiguous in the stream
               Long firstOffset(-1);

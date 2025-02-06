@@ -217,9 +217,6 @@ public:
                 BaseT::post_stage_action(S_new, stage_time);
             }
 
-            // Call the update hook for the stage state value
-            BaseT::pre_rhs_action(S_new, stage_time);
-
             // Fill F[i], the RHS at the current stage
             // F[i] = RHS(y, t) at y = stage_value, t = stage_time
             BaseT::Rhs(*F_nodes[i], S_new, stage_time);
@@ -254,7 +251,8 @@ public:
         for (int step_number = 0; step_number < BaseT::max_steps && !stop; ++step_number)
         {
             // Adjust step size to reach output time
-            if (time_out - time_current < dt) {
+            // protect against roundoff
+            if ((time_out-time_current) < dt || almostEqual(time_out-time_current,dt,1000)) {
                 dt = time_out - time_current;
                 stop = true;
             }
